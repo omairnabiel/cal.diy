@@ -1,0 +1,256 @@
+# Deploy — runs on push to `develop` in the Wavey fork
+# (github.com/omairnabiel/cal.diy). Mirrors Wavey's deploy.yml: build
+# images, push to Wavey's ACR, then `pulumi up` the dev stack with the
+# new image refs. Two differences from Wavey's:
+#
+#   1. We build two images, not three: cal-web (Dockerfile) and cal-api
+#      (Dockerfile.api-v2). Same SHA tag for both — Pulumi pins each
+#      Container App to its exact image so rollback is a config rewrite.
+#
+#   2. Pulumi state lives in the Wavey repo, not here. The `deploy` job
+#      clones omairnabiel/wavey and runs `pulumi up` against the dev
+#      stack with `wavey:calWebImage` / `wavey:calApiImage` rewritten to
+#      the SHAs this run just pushed. Concurrency group `deploy-dev`
+#      matches Wavey's so the two repos serialize against the same stack.
+#
+# One-time setup in the github.com/omairnabiel/cal.diy fork:
+#
+#   Secrets (Settings → Secrets and variables → Actions → New repository secret):
+#     AZURE_CLIENT_ID          User-Assigned Managed Identity client ID
+#                              (same value as Wavey uses; pulumi stack
+#                              output identityClientId)
+#     AZURE_TENANT_ID          Azure AD tenant id
+#     AZURE_SUBSCRIPTION_ID    Subscription containing the wavey-dev-rg
+#     WAVEY_DEPLOY_TOKEN       Fine-grained PAT with `Contents: read` on
+#                              omairnabiel/wavey. Used to `git clone` the
+#                              Wavey repo so `pulumi up` can read the IaC.
+#
+#   Variables (Settings → Secrets and variables → Actions → Variables):
+#     PULUMI_BACKEND_STORAGE_ACCOUNT   e.g. waveypulumistate (same as Wavey)
+#     PULUMI_BACKEND_CONTAINER         e.g. state            (same as Wavey)
+#
+#   And one Wavey-side change (needs to be merged before this workflow
+#   first runs successfully):
+#
+#     The federated identity in src/githubFederation.ts must trust this
+#     repo too. The setupGitHubFederation() call currently trusts
+#     `repo:omairnabiel/wavey:ref:refs/heads/develop` — add a second
+#     credential for `repo:omairnabiel/cal.diy:ref:refs/heads/develop`.
+
+name: Deploy
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+# Same group name as Wavey's workflow so a Wavey deploy and a Cal deploy
+# don't race against the same Pulumi state. cancel-in-progress=false
+# means whichever started first finishes; the second queues.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+env:
+  STACK: dev
+  IMAGE_TAG: ${{ github.sha }}
+  WAVEY_REPO: omairnabiel/wavey
+  # Pulumi state backend (Azure Blob; same values Wavey uses)
+  PULUMI_BACKEND_URL: "azblob://${{ vars.PULUMI_BACKEND_CONTAINER || 'state' }}?storage_account=${{ vars.PULUMI_BACKEND_STORAGE_ACCOUNT }}"
+  AZURE_KEYVAULT_AUTH_VIA_CLI: "true"
+  # Pulumi azure-native provider auth (OIDC) — see Wavey's deploy.yml
+  # for the full rationale on why both ARM_* and AZURE_* are set.
+  ARM_USE_OIDC: "true"
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────
+  # Build + push the two Cal images in parallel. Each tagged with the
+  # commit SHA — no `:latest` (Pulumi pins exact SHAs for deterministic
+  # rollback).
+  # ───────────────────────────────────────────────────────────────────────
+  build:
+    runs-on: ubuntu-latest
+    environment: dev
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - { name: cal-web, dockerfile: Dockerfile,        image: cal-web }
+          - { name: cal-api, dockerfile: Dockerfile.api-v2, image: cal-api }
+    outputs:
+      acr-login-server: ${{ steps.acr.outputs.login-server }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Materialize the OIDC token to a file so the Pulumi azblob backend
+      # (Go SDK, separate credential chain from `az`) can authenticate
+      # via WorkloadIdentityCredential. Same trick as Wavey.
+      - name: Write OIDC token for Azure SDK
+        run: |
+          curl -fsSL \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+            | jq -r '.value' > "$RUNNER_TEMP/oidc-token"
+          echo "AZURE_FEDERATED_TOKEN_FILE=$RUNNER_TEMP/oidc-token" >> $GITHUB_ENV
+
+      # Clone Wavey just to read `acrLoginServer` from Pulumi state. We
+      # don't deploy from this job — that's the next job. Shallow clone
+      # to keep the checkout fast.
+      - name: Clone Wavey (read-only)
+        run: |
+          git clone --depth=1 \
+            "https://x-access-token:${{ secrets.WAVEY_DEPLOY_TOKEN }}@github.com/${{ env.WAVEY_REPO }}.git" \
+            "$RUNNER_TEMP/wavey"
+
+      - name: Read ACR login server from Pulumi state
+        id: acr
+        working-directory: ${{ runner.temp }}/wavey/deploy/pulumi
+        run: |
+          curl -fsSL https://get.pulumi.com | sh
+          export PATH="$HOME/.pulumi/bin:$PATH"
+          npm ci --omit=dev --silent
+          pulumi login "$PULUMI_BACKEND_URL"
+          login_server=$(pulumi --stack ${{ env.STACK }} stack output acrLoginServer)
+          echo "login-server=$login_server" >> $GITHUB_OUTPUT
+
+      - name: Docker login to ACR
+        run: |
+          # `az acr login --expose-token` mints an ACR access token from
+          # the OIDC identity. The positional argument is the registry
+          # URL (piping eats it; pass directly).
+          acr_token=$(az acr login --name "${{ steps.acr.outputs.login-server }}" --expose-token --query accessToken -o tsv)
+          docker login "${{ steps.acr.outputs.login-server }}" \
+            --username 00000000-0000-0000-0000-000000000000 \
+            --password-stdin <<<"$acr_token"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push ${{ matrix.service.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          # Both SHA and a moving `:develop` tag for human convenience.
+          # Pulumi reads only the SHA tag — the moving tag never feeds
+          # into state.
+          tags: |
+            ${{ steps.acr.outputs.login-server }}/${{ matrix.service.image }}:${{ env.IMAGE_TAG }}
+            ${{ steps.acr.outputs.login-server }}/${{ matrix.service.image }}:develop
+          # Common build args for both Cal images. Build-time DATABASE_URL
+          # / NEXTAUTH_SECRET / CALENDSO_ENCRYPTION_KEY are required by
+          # both Next.js (web) and Prisma generate (api-v2), but the
+          # runtime values come from Container Apps env vars (Key Vault).
+          # The placeholders here only need to satisfy the build-time
+          # type checks and Prisma schema validation.
+          build-args: |
+            DATABASE_URL=postgresql://placeholder:placeholder@placeholder:5432/placeholder
+            NEXTAUTH_SECRET=build-time-placeholder
+            CALENDSO_ENCRYPTION_KEY=build-time-placeholder-32-bytes!
+            CALCOM_TELEMETRY_DISABLED=1
+            NEXT_PUBLIC_LICENSE_CONSENT=
+            NEXT_PUBLIC_WEBSITE_TERMS_URL=
+            NEXT_PUBLIC_WEBSITE_PRIVACY_POLICY_URL=
+            NEXT_PUBLIC_SINGLE_ORG_SLUG=
+            ORGANIZATIONS_ENABLED=
+            CSP_POLICY=
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,scope=${{ matrix.service.name }},mode=max
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Clone Wavey, rewrite the two Cal image refs in Pulumi config, run
+  # pulumi up. Concurrency group above ensures we don't race a Wavey
+  # deploy hitting the same stack.
+  # ───────────────────────────────────────────────────────────────────────
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment: dev
+    steps:
+      # We don't need Cal's source for the deploy job — only Wavey's.
+      # Skip actions/checkout@v4 here; clone Wavey explicitly below.
+      - name: Clone Wavey
+        run: |
+          git clone --depth=1 \
+            "https://x-access-token:${{ secrets.WAVEY_DEPLOY_TOKEN }}@github.com/${{ env.WAVEY_REPO }}.git" \
+            wavey
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: wavey/deploy/pulumi/package-lock.json
+
+      - name: Install Pulumi deps
+        working-directory: wavey/deploy/pulumi
+        run: npm ci
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Write OIDC token for Azure SDK
+        run: |
+          curl -fsSL \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+            | jq -r '.value' > "$RUNNER_TEMP/oidc-token"
+          echo "AZURE_FEDERATED_TOKEN_FILE=$RUNNER_TEMP/oidc-token" >> $GITHUB_ENV
+
+      - name: Install Pulumi
+        run: |
+          curl -fsSL https://get.pulumi.com | sh
+          echo "$HOME/.pulumi/bin" >> $GITHUB_PATH
+
+      - name: Pulumi login (Azure Blob backend)
+        working-directory: wavey/deploy/pulumi
+        run: pulumi login "$PULUMI_BACKEND_URL"
+
+      - name: Set Cal image tags in Pulumi config
+        working-directory: wavey/deploy/pulumi
+        run: |
+          ACR=${{ needs.build.outputs.acr-login-server }}
+          SHA=${{ env.IMAGE_TAG }}
+          # Read by Wavey's src/cal.ts to populate each Cal Container App's
+          # template.containers[0].image. These keys do NOT overlap with
+          # Wavey's own wavey:{service}Image keys.
+          pulumi --stack ${{ env.STACK }} config set wavey:calWebImage "$ACR/cal-web:$SHA"
+          pulumi --stack ${{ env.STACK }} config set wavey:calApiImage "$ACR/cal-api:$SHA"
+
+      - name: Pulumi up
+        uses: pulumi/actions@v6
+        with:
+          command: up
+          stack-name: ${{ env.STACK }}
+          work-dir: wavey/deploy/pulumi
+          cloud-url: ${{ env.PULUMI_BACKEND_URL }}
+          comment-on-pr: false
+
+      - name: Print deployed Cal URLs
+        working-directory: wavey/deploy/pulumi
+        run: |
+          echo "Deployed Cal!"
+          echo "  cal-web:  $(pulumi --stack ${{ env.STACK }} stack output calWebUrl 2>/dev/null || echo '(stack output not present yet)')"
+          echo "  cal-api:  $(pulumi --stack ${{ env.STACK }} stack output calApiInternalFqdn 2>/dev/null || echo '(stack output not present yet)')"
