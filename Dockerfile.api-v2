@@ -1,0 +1,106 @@
+# Cal.diy API v2 — production image
+#
+# Builds the NestJS API server in apps/api/v2. The build pipeline mirrors
+# the one in `yarn workspace @calcom/api-v2 dev:build`:
+#   1. platform-constants → platform-enums → platform-utils → platform-types
+#   2. platform-libraries
+#   3. @calcom/trpc build:server
+#   4. prisma generate
+#   5. copy-swagger-module
+#   6. nest build
+#
+# Listens on :5555. Run-time env (DATABASE_URL, REDIS_URL, NEXTAUTH_SECRET,
+# CALENDSO_ENCRYPTION_KEY, STRIPE_API_KEY/WEBHOOK_SECRET, etc.) is provided
+# by the orchestrator (Container Apps from Key Vault), not baked in.
+#
+# Build:
+#   docker build -f Dockerfile.api-v2 -t cal-api:<sha> .
+
+FROM --platform=$BUILDPLATFORM node:20 AS builder
+
+WORKDIR /calcom
+
+# DATABASE_URL is required to satisfy `prisma generate` schema parsing;
+# the value is a throwaway placeholder — the runtime URL is injected by
+# the orchestrator. Same for the auth/encryption keys: build doesn't need
+# the real values, only that the env vars are defined.
+ARG DATABASE_URL=postgresql://placeholder:placeholder@placeholder:5432/placeholder
+ARG NEXTAUTH_SECRET=build-time-placeholder
+ARG CALENDSO_ENCRYPTION_KEY=build-time-placeholder-32-bytes!
+ARG STRIPE_API_KEY=sk_test_build_placeholder
+ARG STRIPE_WEBHOOK_SECRET=whsec_build_placeholder
+ARG MAX_OLD_SPACE_SIZE=6144
+
+ENV NODE_ENV=production \
+    DATABASE_URL=$DATABASE_URL \
+    DATABASE_DIRECT_URL=$DATABASE_URL \
+    DATABASE_READ_URL=$DATABASE_URL \
+    DATABASE_WRITE_URL=$DATABASE_URL \
+    NEXTAUTH_SECRET=$NEXTAUTH_SECRET \
+    CALENDSO_ENCRYPTION_KEY=$CALENDSO_ENCRYPTION_KEY \
+    STRIPE_API_KEY=$STRIPE_API_KEY \
+    STRIPE_WEBHOOK_SECRET=$STRIPE_WEBHOOK_SECRET \
+    NODE_OPTIONS=--max-old-space-size=${MAX_OLD_SPACE_SIZE}
+
+# Monorepo essentials. We copy everything api-v2 transitively depends on,
+# which (in this monorepo) is most of `packages/`. Pruning further would
+# break workspace resolution.
+COPY package.json yarn.lock .yarnrc.yml turbo.json i18n.json ./
+COPY .yarn ./.yarn
+COPY apps/api/v2 ./apps/api/v2
+COPY packages ./packages
+
+RUN yarn config set httpTimeout 1200000
+RUN yarn install --immutable
+
+# Generate Prisma client (read & write services in api-v2 import this)
+RUN yarn workspace @calcom/prisma run post-install
+
+# Platform package chain — order matters (constants → libraries depends on
+# the earlier ones). Mirrors apps/api/v2/package.json:dev:build.
+RUN yarn workspace @calcom/platform-constants build && \
+    yarn workspace @calcom/platform-enums     build && \
+    yarn workspace @calcom/platform-utils     build && \
+    yarn workspace @calcom/platform-types     build && \
+    yarn workspace @calcom/platform-libraries build && \
+    yarn workspace @calcom/trpc               run build:server
+
+# Swagger module copy + NestJS build
+RUN yarn workspace @calcom/api-v2 run copy-swagger-module
+RUN yarn workspace @calcom/api-v2 run build
+
+# Strip caches that bloat the image
+RUN rm -rf node_modules/.cache .yarn/cache
+
+# ─── Runtime stage ────────────────────────────────────────────────────────
+FROM node:20-slim AS runner
+
+WORKDIR /calcom
+
+# wget for the HEALTHCHECK probe; tini for proper PID 1 signal handling
+RUN apt-get update && apt-get install -y --no-install-recommends wget tini && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV NODE_ENV=production \
+    API_PORT=5555 \
+    API_URL=http://localhost
+
+# Bring over everything the running app needs. We can't drop the platform
+# package dist outputs — api-v2 imports them at runtime.
+COPY --from=builder /calcom/package.json /calcom/yarn.lock /calcom/.yarnrc.yml /calcom/turbo.json /calcom/i18n.json ./
+COPY --from=builder /calcom/.yarn ./.yarn
+COPY --from=builder /calcom/node_modules ./node_modules
+COPY --from=builder /calcom/packages ./packages
+COPY --from=builder /calcom/apps/api/v2 ./apps/api/v2
+
+EXPOSE 5555
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
+  CMD wget --spider -q http://localhost:5555/health || exit 1
+
+WORKDIR /calcom/apps/api/v2
+
+# tini reaps zombies + forwards SIGTERM so Container Apps' graceful
+# shutdown actually works (NestJS otherwise drags out the shutdown).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["node", "./dist/apps/api/v2/src/main.js"]
