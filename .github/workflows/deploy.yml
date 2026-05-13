@@ -21,9 +21,14 @@
 #                              output identityClientId)
 #     AZURE_TENANT_ID          Azure AD tenant id
 #     AZURE_SUBSCRIPTION_ID    Subscription containing the wavey-dev-rg
-#     WAVEY_DEPLOY_TOKEN       Fine-grained PAT with `Contents: read` on
-#                              omairnabiel/wavey. Used to `git clone` the
-#                              Wavey repo so `pulumi up` can read the IaC.
+#     WAVEY_DEPLOY_KEY         SSH private key (the FULL PEM, including
+#                              BEGIN/END lines). Its public counterpart
+#                              must be registered as a read-only deploy
+#                              key on omairnabiel/wavey
+#                              (github.com/omairnabiel/wavey/settings/keys).
+#                              Used to `git clone` Wavey so `pulumi up`
+#                              can read the IaC. SSH deploy keys avoid
+#                              account-level PATs.
 #
 #   Variables (Settings → Secrets and variables → Actions → Variables):
 #     PULUMI_BACKEND_STORAGE_ACCOUNT   e.g. waveypulumistate (same as Wavey)
@@ -113,10 +118,19 @@ jobs:
       # Clone Wavey just to read `acrLoginServer` from Pulumi state. We
       # don't deploy from this job — that's the next job. Shallow clone
       # to keep the checkout fast.
+      # SSH deploy key on the Wavey repo (read-only). Avoids PATs in case
+      # account / org policy disallows them. Set WAVEY_DEPLOY_KEY in this
+      # repo's secrets to the PRIVATE key whose public counterpart is
+      # registered as a deploy key on omairnabiel/wavey.
+      - name: Load SSH deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.WAVEY_DEPLOY_KEY }}
+
       - name: Clone Wavey (read-only)
         run: |
           git clone --depth=1 \
-            "https://x-access-token:${{ secrets.WAVEY_DEPLOY_TOKEN }}@github.com/${{ env.WAVEY_REPO }}.git" \
+            "git@github.com:${{ env.WAVEY_REPO }}.git" \
             "$RUNNER_TEMP/wavey"
 
       - name: Read ACR login server from Pulumi state
@@ -187,10 +201,15 @@ jobs:
     steps:
       # We don't need Cal's source for the deploy job — only Wavey's.
       # Skip actions/checkout@v4 here; clone Wavey explicitly below.
+      - name: Load SSH deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.WAVEY_DEPLOY_KEY }}
+
       - name: Clone Wavey
         run: |
           git clone --depth=1 \
-            "https://x-access-token:${{ secrets.WAVEY_DEPLOY_TOKEN }}@github.com/${{ env.WAVEY_REPO }}.git" \
+            "git@github.com:${{ env.WAVEY_REPO }}.git" \
             wavey
 
       - name: Setup Node
