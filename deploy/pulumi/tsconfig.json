@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "outDir": "bin",
+    "target": "es2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "experimentalDecorators": true,
+    "pretty": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "files": [
+    "index.ts",
+    "src/network.ts",
+    "src/registry.ts",
+    "src/identity.ts",
+    "src/keyvault.ts",
+    "src/containerappsenv.ts",
+    "src/postgres.ts",
+    "src/redis.ts",
+    "src/secrets.ts",
+    "src/containerapps.ts",
+    "src/githubFederation.ts",
+    "src/stateBackendAccess.ts"
+  ]
+}

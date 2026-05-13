@@ -1,0 +1,26 @@
+{
+  "name": "@cal/pulumi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted Cal.diy Azure infrastructure (Pulumi + TypeScript)",
+  "main": "index.ts",
+  "scripts": {
+    "preview": "pulumi preview",
+    "up": "pulumi up",
+    "destroy": "pulumi destroy",
+    "tsc": "tsc --noEmit"
+  },
+  "ts-node": {
+    "transpileOnly": true
+  },
+  "dependencies": {
+    "@pulumi/azure-native": "^2.81.0",
+    "@pulumi/pulumi": "^3.140.0",
+    "@pulumi/random": "^4.16.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,0 +1,20 @@
+# Dev stack config. Plain, non-secret values only. Secrets live in Key
+# Vault and are set out-of-band via `az keyvault secret set`. See
+# deploy/pulumi/README.md for the operator workflow.
+config:
+  # UK South to keep latency low for UK users and stay in-region with the
+  # operator's other infra. Don't change after first deploy.
+  azure-native:location: uksouth
+
+# Set these after running scripts/bootstrap-pulumi-backend.sh:
+#   cal:stateStorageAccountId: /subscriptions/.../storageAccounts/calpulumistate<rand>
+#   cal:stateKeyVaultId:       /subscriptions/.../vaults/cal-pulumi-state-kv-<rand>
+#
+# Trust the Cal fork's GitHub Actions to mint Azure OIDC tokens:
+#   cal:githubRepo: omairnabiel/cal.diy
+#
+# Per-app image refs. CI sets these via `pulumi config set` after pushing
+# images to ACR. Defaults to a placeholder so a first `pulumi up`
+# succeeds even before any build has run.
+#   cal:calWebImage: <acr>.azurecr.io/cal-web:<sha>
+#   cal:calApiImage: <acr>.azurecr.io/cal-api:<sha>
