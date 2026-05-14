@@ -31,8 +31,11 @@ ARG STRIPE_API_KEY=sk_test_build_placeholder
 ARG STRIPE_WEBHOOK_SECRET=whsec_build_placeholder
 ARG MAX_OLD_SPACE_SIZE=6144
 
-ENV NODE_ENV=production \
-    DATABASE_URL=$DATABASE_URL \
+# NOTE: do NOT set NODE_ENV=production in this stage. Yarn 4 + various
+# tooling skip devDependencies when NODE_ENV=production, which breaks
+# `nest build` / `tsc` (TypeScript is a devDep). Production NODE_ENV is
+# only set in the runtime stage below.
+ENV DATABASE_URL=$DATABASE_URL \
     DATABASE_DIRECT_URL=$DATABASE_URL \
     DATABASE_READ_URL=$DATABASE_URL \
     DATABASE_WRITE_URL=$DATABASE_URL \
