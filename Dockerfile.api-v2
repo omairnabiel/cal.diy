@@ -72,6 +72,17 @@ RUN yarn install
 # Generate Prisma client (read & write services in api-v2 import this)
 RUN yarn workspace @calcom/prisma run post-install
 
+# DIAGNOSTIC: where is tsc?
+RUN echo "=== yarn version ===" && yarn --version && \
+    echo "=== root node_modules/.bin (head) ===" && \
+    ls node_modules/.bin/ 2>&1 | head -40 && \
+    echo "=== find all tsc binaries ===" && \
+    find . -name tsc -path "*node_modules/.bin*" 2>/dev/null | head -20 && \
+    echo "=== typescript package dir ===" && \
+    ls node_modules/typescript/bin/ 2>&1 | head -5 && \
+    echo "=== platform-constants workspace ls ===" && \
+    ls packages/platform/constants/ 2>&1 | head -10
+
 # Platform package chain — order matters (constants → libraries depends on
 # the earlier ones). Mirrors apps/api/v2/package.json:dev:build.
 RUN yarn workspace @calcom/platform-constants build && \
