@@ -49,7 +49,9 @@ export function createRedis(inputs: RedisInputs): RedisOutputs {
         targetPort: 6379,
         exposedPort: 6379,
         transport: "tcp",
-        allowInsecure: true,
+        // `allowInsecure` is only valid for HTTP transport; Azure rejects
+        // it on TCP. TCP ingress doesn't expose a TLS-vs-cleartext knob —
+        // it's raw TCP either way, scoped to the VNet via external=false.
       },
     },
     template: {
