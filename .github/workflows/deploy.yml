@@ -86,25 +86,6 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Write OIDC token for Azure SDK
-        run: |
-          curl -fsSL \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
-            | jq -r '.value' > "$RUNNER_TEMP/oidc-token"
-          echo "AZURE_FEDERATED_TOKEN_FILE=$RUNNER_TEMP/oidc-token" >> $GITHUB_ENV
-
-      - name: Debug — print OIDC token claims (TEMPORARY)
-        run: |
-          # Decode JWT payload (middle segment) and pretty-print the
-          # subject + audience + iss. Helps diagnose which fed cred
-          # Azure should match.
-          PAYLOAD=$(cut -d. -f2 "$RUNNER_TEMP/oidc-token")
-          # base64 url decode with proper padding
-          PAYLOAD_PADDED=$(printf "%s%s" "$PAYLOAD" "$(printf '%*s' $(( (4 - ${#PAYLOAD} % 4) % 4 )) | tr ' ' '=')")
-          echo "$PAYLOAD_PADDED" | tr '_-' '/+' | base64 -d 2>/dev/null \
-            | jq '{sub: .sub, aud: .aud, iss: .iss, repository: .repository, environment: .environment, ref: .ref}'
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -120,6 +101,17 @@ jobs:
         id: acr
         working-directory: deploy/pulumi
         run: |
+          # Mint a fresh OIDC token at the moment of use. GitHub OIDC
+          # tokens expire fast (~5–15 min); writing the token once at
+          # the top of the job often leaves it stale by the time the
+          # Azure Go SDK in pulumi reads it, yielding a 403 that looks
+          # like an RBAC problem but is really an expired credential.
+          curl -fsSL \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+            | jq -r '.value' > "$RUNNER_TEMP/oidc-token"
+          export AZURE_FEDERATED_TOKEN_FILE="$RUNNER_TEMP/oidc-token"
+
           curl -fsSL https://get.pulumi.com | sh
           export PATH="$HOME/.pulumi/bin:$PATH"
           pulumi login "$PULUMI_BACKEND_URL"
@@ -189,26 +181,26 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Write OIDC token for Azure SDK
-        run: |
-          curl -fsSL \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
-            | jq -r '.value' > "$RUNNER_TEMP/oidc-token"
-          echo "AZURE_FEDERATED_TOKEN_FILE=$RUNNER_TEMP/oidc-token" >> $GITHUB_ENV
-
       - name: Install Pulumi
         run: |
           curl -fsSL https://get.pulumi.com | sh
           echo "$HOME/.pulumi/bin" >> $GITHUB_PATH
 
-      - name: Pulumi login (Azure Blob backend)
-        working-directory: deploy/pulumi
-        run: pulumi login "$PULUMI_BACKEND_URL"
-
-      - name: Set Cal image tags in Pulumi config
+      - name: Pulumi login + set image tags
         working-directory: deploy/pulumi
         run: |
+          # Fresh OIDC token at the moment of use (GitHub tokens expire
+          # in 5-15 min; writing it once at the top of the job risks
+          # 403s on later Azure SDK calls).
+          curl -fsSL \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+            | jq -r '.value' > "$RUNNER_TEMP/oidc-token"
+          echo "AZURE_FEDERATED_TOKEN_FILE=$RUNNER_TEMP/oidc-token" >> $GITHUB_ENV
+          export AZURE_FEDERATED_TOKEN_FILE="$RUNNER_TEMP/oidc-token"
+
+          pulumi login "$PULUMI_BACKEND_URL"
+
           ACR=${{ needs.build.outputs.acr-login-server }}
           SHA=${{ env.IMAGE_TAG }}
           pulumi --stack ${{ env.STACK }} config set cal:calWebImage "$ACR/cal-web:$SHA"
