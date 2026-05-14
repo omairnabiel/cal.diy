@@ -8,6 +8,7 @@ config:
   cal:stateStorageAccountId: /subscriptions/cc2d669d-282e-4fe7-a425-b60578ddc08e/resourceGroups/cal-state-rg/providers/Microsoft.Storage/storageAccounts/calstatea15b96
   cal:stateKeyVaultId: /subscriptions/cc2d669d-282e-4fe7-a425-b60578ddc08e/resourceGroups/cal-state-rg/providers/Microsoft.KeyVault/vaults/cal-state-kv-9f4dd7
   cal:githubRepo: omairnabiel/cal.diy
+  cal:additionalAllowedHostnames: wavey-dev-admin-ui.yellowplant-bc83af28.uksouth.azurecontainerapps.io,wavey-dev-backend.yellowplant-bc83af28.uksouth.azurecontainerapps.io
 secretsprovider: azurekeyvault://cal-state-kv-9f4dd7.vault.azure.net/keys/pulumi-secrets
 encryptedkey: RktGZFdzS1l6R0FIcXdRYVJDZTZVWGgyT3NnNjRQRzhFd3Z1clYtcXQ4N3NkdGRKRDM5aTBTaEFpRnczb2MyaG1SOHVpaTZmakYyd3hnM05ka2lUM2htcmFnaHZYYlNGNG83X01XbTJBWTJQMVRESnZtLUVqTzJLcGdPMWJfcXVILWVsTUhrM3paMzZqZlVYeHdMMHpDX1l3aF9JcFZwT2htOTZYVG96dzhvaDhObno3LTk4V1puTkhEVFV6RjBBbWlkX3VQdkF1OGpmYktUTmJPdUZtMllRcDZJSmZod0V5Q1ljSHFJUzlCdDZzZmpobVc3cFlORUF1SUVIS1F3ckh1dWtyMHY2bi1YQlJtRHY2ajFuX29OQ0VTY2JQWldMTTRDcXNiZ1lMZzBrVTAzcEZvOUd3bDdBVFlheXc1OFBIU1prdXl6bUNicnIxM240Zl9Cc0pR
 
