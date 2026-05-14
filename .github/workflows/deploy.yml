@@ -94,6 +94,17 @@ jobs:
             | jq -r '.value' > "$RUNNER_TEMP/oidc-token"
           echo "AZURE_FEDERATED_TOKEN_FILE=$RUNNER_TEMP/oidc-token" >> $GITHUB_ENV
 
+      - name: Debug — print OIDC token claims (TEMPORARY)
+        run: |
+          # Decode JWT payload (middle segment) and pretty-print the
+          # subject + audience + iss. Helps diagnose which fed cred
+          # Azure should match.
+          PAYLOAD=$(cut -d. -f2 "$RUNNER_TEMP/oidc-token")
+          # base64 url decode with proper padding
+          PAYLOAD_PADDED=$(printf "%s%s" "$PAYLOAD" "$(printf '%*s' $(( (4 - ${#PAYLOAD} % 4) % 4 )) | tr ' ' '=')")
+          echo "$PAYLOAD_PADDED" | tr '_-' '/+' | base64 -d 2>/dev/null \
+            | jq '{sub: .sub, aud: .aud, iss: .iss, repository: .repository, environment: .environment, ref: .ref}'
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
