@@ -57,8 +57,17 @@ COPY apps ./apps
 COPY packages ./packages
 COPY example-apps ./example-apps
 
+# corepack enable ensures the .yarnrc.yml's yarnPath (Yarn 4.12.0) is
+# actually used instead of whatever Yarn version the base image ships.
+RUN corepack enable
 RUN yarn config set httpTimeout 1200000
-RUN yarn install --immutable
+# Plain `yarn install` (NOT --immutable). The web Dockerfile uses this too:
+# --immutable refuses to update the lockfile if any workspace's resolution
+# would change, which it does when the lockfile has been touched on disk
+# or when the platform-arch combination differs from the developer's
+# laptop. Plain install is safe here because the lockfile is checked into
+# the repo and represents the only acceptable resolutions anyway.
+RUN yarn install
 
 # Generate Prisma client (read & write services in api-v2 import this)
 RUN yarn workspace @calcom/prisma run post-install
