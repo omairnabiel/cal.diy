@@ -122,6 +122,15 @@ export function createContainerApps(
   const config = new pulumi.Config("cal");
   const calWebImage = config.get("calWebImage") ?? PLACEHOLDER_IMAGE;
   const calApiImage = config.get("calApiImage") ?? PLACEHOLDER_IMAGE;
+  // Comma-separated FQDNs from external consumers (e.g. Wavey's admin-ui
+  // and backend) that Cal should accept in its host-allowlist check.
+  // Set via:
+  //   pulumi config set cal:additionalAllowedHostnames "wavey-...,wavey-..."
+  // Hostnames only — no scheme. Cal checks the request `Host` header.
+  const additionalAllowedHostnames = (config.get("additionalAllowedHostnames") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   const sharedSecrets = buildSharedSecrets({
     vault,
@@ -188,7 +197,11 @@ export function createContainerApps(
               ["NEXT_PUBLIC_API_V2_URL", pulumi.interpolate`${calWebPublicUrl}/api/v2`],
               [
                 "ALLOWED_HOSTNAMES",
-                pulumi.interpolate`"${calWebFqdn}"`,
+                // Cal's parser expects a comma-separated list of
+                // quoted hostnames (matches the .env.example shape).
+                calWebFqdn.apply((fqdn) =>
+                  [`"${fqdn}"`, ...additionalAllowedHostnames.map((h) => `"${h}"`)].join(","),
+                ),
               ],
               ["RESERVED_SUBDOMAINS", RESERVED_SUBDOMAINS],
             ],
