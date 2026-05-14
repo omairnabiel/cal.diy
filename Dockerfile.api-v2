@@ -42,13 +42,17 @@ ENV NODE_ENV=production \
     STRIPE_WEBHOOK_SECRET=$STRIPE_WEBHOOK_SECRET \
     NODE_OPTIONS=--max-old-space-size=${MAX_OLD_SPACE_SIZE}
 
-# Monorepo essentials. We copy everything api-v2 transitively depends on,
-# which (in this monorepo) is most of `packages/`. Pruning further would
-# break workspace resolution.
+# Monorepo essentials. Yarn 4 with --immutable refuses to install if any
+# workspace declared in the root package.json's `workspaces` glob is
+# missing — it would recompute resolutions and modify yarn.lock. The
+# root globs cover apps/*, apps/api/*, packages/*, packages/embeds/*,
+# packages/features/*, packages/platform/*, and example-apps/*, so we
+# need all of them on disk for the install to succeed.
 COPY package.json yarn.lock .yarnrc.yml turbo.json i18n.json ./
 COPY .yarn ./.yarn
-COPY apps/api/v2 ./apps/api/v2
+COPY apps ./apps
 COPY packages ./packages
+COPY example-apps ./example-apps
 
 RUN yarn config set httpTimeout 1200000
 RUN yarn install --immutable
