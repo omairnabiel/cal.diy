@@ -101,17 +101,46 @@ jobs:
         id: acr
         working-directory: deploy/pulumi
         run: |
-          # Mint a fresh OIDC token at the moment of use. GitHub OIDC
-          # tokens expire fast (~5–15 min); writing the token once at
-          # the top of the job often leaves it stale by the time the
-          # Azure Go SDK in pulumi reads it, yielding a 403 that looks
-          # like an RBAC problem but is really an expired credential.
+          set -e
+
+          # 1. Mint a fresh OIDC token
           curl -fsSL \
             -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
             | jq -r '.value' > "$RUNNER_TEMP/oidc-token"
           export AZURE_FEDERATED_TOKEN_FILE="$RUNNER_TEMP/oidc-token"
 
+          # ─── DEBUG: manually exchange OIDC token for an Azure AD storage token
+          echo "::group::OIDC → Azure AD exchange diagnostic"
+          OIDC=$(cat "$RUNNER_TEMP/oidc-token")
+          EXCHANGE_RESP=$(curl -sS -X POST \
+            "https://login.microsoftonline.com/${{ secrets.AZURE_TENANT_ID }}/oauth2/v2.0/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+            --data-urlencode "scope=https://storage.azure.com/.default" \
+            --data-urlencode "client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" \
+            --data-urlencode "client_assertion=$OIDC" \
+            --data-urlencode "grant_type=client_credentials")
+          echo "Exchange response (errors only):"
+          echo "$EXCHANGE_RESP" | jq 'if .error then {error, error_description, error_codes, timestamp, trace_id, correlation_id} else "OK" end'
+          ACCESS_TOKEN=$(echo "$EXCHANGE_RESP" | jq -r '.access_token // empty')
+          if [ -n "$ACCESS_TOKEN" ]; then
+            PAYLOAD=$(echo "$ACCESS_TOKEN" | cut -d. -f2)
+            PADDED="${PAYLOAD}$(printf '%*s' $(( (4 - ${#PAYLOAD} % 4) % 4 )) | tr ' ' '=')"
+            echo "Access token claims:"
+            echo "$PADDED" | tr '_-' '/+' | base64 -d 2>/dev/null \
+              | jq '{aud, iss, oid, sub, appid, idtyp, xms_mirid}'
+            echo ""
+            echo "Direct blob read via this token:"
+            curl -s -i \
+              -H "Authorization: Bearer $ACCESS_TOKEN" \
+              -H "x-ms-version: 2021-04-10" \
+              "https://calstatea15b96.blob.core.windows.net/state/.pulumi/meta.yaml" \
+              | head -10
+          fi
+          echo "::endgroup::"
+
+          # 2. Real pulumi login
           curl -fsSL https://get.pulumi.com | sh
           export PATH="$HOME/.pulumi/bin:$PATH"
           pulumi login "$PULUMI_BACKEND_URL"
