@@ -180,9 +180,11 @@ export const postgresCalendsoDb = pg.calendsoDbName;
 export const redisInternalFqdn = redis.internalFqdn;
 export const availableSecretNames = secrets.availableNames;
 export const calWebUrl = pulumi.interpolate`https://${apps.calWebFqdn}`;
-export const calApiInternalFqdn = apps.calApiInternalFqdn;
+export const calApiFqdn = apps.calApiFqdn;
+export const calApiUrl = pulumi.interpolate`https://${apps.calApiFqdn}`;
 export const calMigrationsJobName = apps.calMigrationsJobName;
 
-export const deploymentUrls = pulumi.all([apps.calWebFqdn]).apply(([calWeb]) => ({
+export const deploymentUrls = pulumi.all([apps.calWebFqdn, apps.calApiFqdn]).apply(([calWeb, calApi]) => ({
   calWeb: `https://${calWeb}`,
+  calApi: `https://${calApi}`,
 }));

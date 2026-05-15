@@ -58,7 +58,7 @@ export interface ContainerAppsInputs {
 
 export interface ContainerAppsOutputs {
   calWebFqdn: pulumi.Output<string>;
-  calApiInternalFqdn: pulumi.Output<string>;
+  calApiFqdn: pulumi.Output<string>;
   calMigrationsJobName: pulumi.Output<string>;
 }
 
@@ -140,11 +140,17 @@ export function createContainerApps(
 
   // Deterministic FQDNs (computed from app name + env domain). Avoids
   // chicken-and-egg between cal-web and cal-api wanting each other's URL.
+  //
+  // Both apps have external ingress. cal-api lives in a different VNet
+  // from Wavey, so Wavey's backend has no internal path to it — it must
+  // reach cal-api over the public network with API-key auth. That's the
+  // same shape you'd integrate Cal.com Cloud, so we mirror it here.
   const calWebAppName = `cal-${envSuffix}-cal-web`;
   const calApiAppName = `cal-${envSuffix}-cal-api`;
   const calWebFqdn = pulumi.interpolate`${calWebAppName}.${environment.defaultDomain}`;
-  const calApiInternalFqdn = pulumi.interpolate`${calApiAppName}.internal.${environment.defaultDomain}`;
+  const calApiFqdn = pulumi.interpolate`${calApiAppName}.${environment.defaultDomain}`;
   const calWebPublicUrl = pulumi.interpolate`https://${calWebFqdn}`;
+  const calApiPublicUrl = pulumi.interpolate`https://${calApiFqdn}`;
 
   const calWebIngress: IngressArgs = {
     external: true,
@@ -155,7 +161,7 @@ export function createContainerApps(
   };
 
   const calApiIngress: IngressArgs = {
-    external: false,
+    external: true,
     targetPort: 5555,
     transport: "auto",
     allowInsecure: false,
@@ -194,7 +200,7 @@ export function createContainerApps(
               ["NEXT_PUBLIC_WEBAPP_URL", calWebPublicUrl],
               ["NEXT_PUBLIC_WEBSITE_URL", calWebPublicUrl],
               ["NEXTAUTH_URL", calWebPublicUrl],
-              ["NEXT_PUBLIC_API_V2_URL", pulumi.interpolate`${calWebPublicUrl}/api/v2`],
+              ["NEXT_PUBLIC_API_V2_URL", pulumi.interpolate`${calApiPublicUrl}/v2`],
               [
                 "ALLOWED_HOSTNAMES",
                 // Cal's parser expects a comma-separated list of
@@ -339,7 +345,7 @@ export function createContainerApps(
 
   return {
     calWebFqdn,
-    calApiInternalFqdn,
+    calApiFqdn,
     calMigrationsJobName: migrationsJob.name,
   };
 }
