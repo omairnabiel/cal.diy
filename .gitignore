@@ -117,3 +117,4 @@ agents/devin-knowledge.json
 
 # pagefind
 _pagefind/
+**/.env
