@@ -248,6 +248,10 @@ export function createContainerApps(
       secrets: sharedSecrets,
     },
     template: {
+      // Two containers in this Container App: the NestJS API, and a
+      // Redis sidecar. They share localhost, so REDIS_URL just points
+      // at localhost:6379. This works around the Container Apps Consumption-
+      // plan limitation where inter-app internal TCP ingress times out.
       containers: [
         {
           name: calApiAppName,
@@ -283,6 +287,14 @@ export function createContainerApps(
             ],
             availableNames: availableSecretNames,
           }),
+        },
+        {
+          name: "redis",
+          image: "docker.io/library/redis:7-alpine",
+          resources: { cpu: 0.25, memory: "0.5Gi" },
+          // Bind to localhost only — no external exposure. Ephemeral
+          // (no persistence volume); cache evicts on revision roll.
+          command: ["redis-server", "--bind", "127.0.0.1", "--port", "6379"],
         },
       ],
       scale: { minReplicas: 1, maxReplicas: 1 },

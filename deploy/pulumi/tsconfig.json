@@ -21,7 +21,6 @@
     "src/keyvault.ts",
     "src/containerappsenv.ts",
     "src/postgres.ts",
-    "src/redis.ts",
     "src/secrets.ts",
     "src/containerapps.ts",
     "src/githubFederation.ts",

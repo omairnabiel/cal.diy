@@ -39,7 +39,6 @@ import { createIdentity } from "./src/identity";
 import { createKeyVault } from "./src/keyvault";
 import { createContainerAppsEnv } from "./src/containerappsenv";
 import { createPostgres } from "./src/postgres";
-import { createRedis } from "./src/redis";
 import { generatePostgresPassword, setupSecrets } from "./src/secrets";
 import { createContainerApps } from "./src/containerapps";
 import { setupGitHubFederation } from "./src/githubFederation";
@@ -112,14 +111,18 @@ const pg = createPostgres({
   adminPassword: postgresAdminPassword,
 });
 
-// ─── 9. Redis (Container App) ─────────────────────────────────────────────
-const redis = createRedis({
-  resourceGroup,
-  envSuffix,
-  tags,
-  environment: cae.environment,
-  containerAppsEnvDomain: cae.defaultDomain,
-});
+// ─── 9. Redis URL ─────────────────────────────────────────────────────────
+// Redis runs as a sidecar container INSIDE the cal-api Container App
+// (see containerapps.ts). The original standalone Container App approach
+// hit Azure's limitation that internal-only TCP ingress between Container
+// Apps doesn't work reliably on Consumption-plan environments — DNS
+// resolves but TCP connections time out. Sidecar pattern works because
+// containers in the same Container App share localhost.
+//
+// Trade-off: each cal-api replica has its own Redis cache. Fine for
+// dev with minReplicas=1; for prod scale out, swap to Azure Managed
+// Redis.
+const redisUrl = pulumi.output("redis://localhost:6379");
 
 // ─── 10. Secrets in Key Vault ─────────────────────────────────────────────
 const secrets = setupSecrets({
@@ -130,7 +133,7 @@ const secrets = setupSecrets({
   postgresAdminLogin: pg.adminLogin,
   postgresAdminPassword,
   calendsoDbName: pg.calendsoDbName,
-  redisUrl: redis.redisUrl,
+  redisUrl,
 });
 
 // ─── 11. Cal Container Apps ───────────────────────────────────────────────
@@ -177,7 +180,6 @@ export const containerAppsSubnetId = net.containerAppsSubnet.id;
 export const privateEndpointsSubnetId = net.privateEndpointsSubnet.id;
 export const postgresFqdn = pg.fqdn;
 export const postgresCalendsoDb = pg.calendsoDbName;
-export const redisInternalFqdn = redis.internalFqdn;
 export const availableSecretNames = secrets.availableNames;
 export const calWebUrl = pulumi.interpolate`https://${apps.calWebFqdn}`;
 export const calApiFqdn = apps.calApiFqdn;
