@@ -27,7 +27,14 @@ import * as keyvault from "@pulumi/azure-native/keyvault";
  * here as they're needed; runtime wiring in containerapps.ts conditional
  * on presence in availableNames.
  */
-export const EXTERNAL_SECRET_NAMES = ["resend-api-key"] as const;
+export const EXTERNAL_SECRET_NAMES = [
+  "resend-api-key",
+  // Google OAuth client credentials (JSON blob — the full
+  // `{"web":{"client_id":"…","client_secret":"…","redirect_uris":[…]}}`
+  // object Cal expects). Without this, the Google Calendar / Google
+  // Login integrations are disabled in the UI.
+  "google-api-credentials",
+] as const;
 
 export interface PostgresPasswordOutputs {
   password: pulumi.Output<string>;
