@@ -1,5 +1,4 @@
 import { _generateMetadata } from "app/_utils";
-import { unstable_cache } from "next/cache";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -20,14 +19,15 @@ export const generateMetadata = async () =>
     "/settings/developer/api-keys"
   );
 
-const getCachedApiKeys = unstable_cache(
-  async (userId: number) => {
-    const apiKeyRepository = await PrismaApiKeyRepository.withGlobalPrisma();
-    return await apiKeyRepository.findApiKeysFromUserId({ userId });
-  },
-  undefined,
-  { revalidate: 3600, tags: ["viewer.apiKeys.list"] } // Cache for 1 hour
-);
+// Force dynamic rendering. Each user's API key list is per-user mutable
+// state — wrapping it in `unstable_cache` (the previous implementation)
+// produced stale UI for up to an hour after every create/delete, because
+// (a) the cache wasn't reliably invalidated on mutation (the action's
+// `revalidateTag("…", "max")` call passes a non-standard second arg)
+// and (b) ApiKeysView renders the server prop directly without a
+// client-side useQuery, so React-Query invalidations don't update the
+// view. One Prisma call per render is cheap for a per-user settings page.
+export const dynamic = "force-dynamic";
 
 const Page = async () => {
   const session = await getServerSession({ req: buildLegacyRequest(await headers(), await cookies()) });
@@ -36,8 +36,8 @@ const Page = async () => {
     redirect("/auth/login?callbackUrl=/settings/developer/api-keys");
   }
 
-  const userId = session.user.id;
-  const apiKeys = await getCachedApiKeys(userId);
+  const apiKeyRepository = await PrismaApiKeyRepository.withGlobalPrisma();
+  const apiKeys = await apiKeyRepository.findApiKeysFromUserId({ userId: session.user.id });
 
   return <ApiKeysView apiKeys={apiKeys} />;
 };
